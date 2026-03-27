@@ -6,6 +6,7 @@ import pytest
 ct = pytest.importorskip("cantera")
 
 from ta.simulator import TASimulator, SimulationResult
+from ta.temperature_program import TemperatureProgram, TemperatureSegment
 
 
 # ------------------------------------------------------------------
@@ -338,3 +339,107 @@ class TestValidation:
                 sample_composition="CH4:1",
                 condensed_species=["UNOBTANIUM"],
             )
+
+
+# ------------------------------------------------------------------
+# Multi-segment temperature programs
+# ------------------------------------------------------------------
+class TestMultiSegmentProgram:
+    """Verify that multi-segment temperature programs work correctly."""
+
+    def test_ramp_hold_ramp_furnace_profile(self):
+        """Furnace temperature should ramp, flatten during hold, then ramp."""
+        prog = TemperatureProgram(50.0, [
+            TemperatureSegment(20.0, 150.0),              # 5 min ramp
+            TemperatureSegment(0.0, 150.0, hold_min=2.0),  # 2 min hold
+            TemperatureSegment(20.0, 200.0),              # 2.5 min ramp
+        ])
+        sim = TASimulator(
+            mechanism="gri30.yaml",
+            sample_composition="AR:1",
+            bath_gas="AR",
+            dt=2.0,
+            temperature_program=prog,
+        )
+        result = sim.run()
+
+        # During the hold segment (300 s to 420 s), furnace T should be 150
+        hold_mask = (result.time_s >= 300.0) & (result.time_s <= 420.0)
+        assert hold_mask.sum() > 0, "No points recorded during hold"
+        np.testing.assert_allclose(
+            result.furnace_temperature_C[hold_mask], 150.0, atol=0.1,
+        )
+
+    def test_reactor_temp_flattens_during_hold(self):
+        """Reactor temperature should stabilise during an isothermal hold."""
+        prog = TemperatureProgram(50.0, [
+            TemperatureSegment(20.0, 150.0),               # 5 min ramp
+            TemperatureSegment(0.0, 150.0, hold_min=5.0),   # 5 min hold
+        ])
+        sim = TASimulator(
+            mechanism="gri30.yaml",
+            sample_composition="AR:1",
+            bath_gas="AR",
+            dt=2.0,
+            temperature_program=prog,
+        )
+        result = sim.run()
+
+        # Last quarter of the hold: reactor should be very close to 150
+        hold_end_mask = (result.time_s >= 540.0) & (result.time_s <= 600.0)
+        assert hold_end_mask.sum() > 0
+        np.testing.assert_allclose(
+            result.reactor_temperature_C[hold_end_mask], 150.0, atol=0.5,
+        )
+
+    def test_cooling_segment_decreases_furnace(self):
+        """Furnace temperature should decrease during a cooling segment."""
+        prog = TemperatureProgram(50.0, [
+            TemperatureSegment(20.0, 200.0),   # heat
+            TemperatureSegment(-10.0, 100.0),  # cool
+        ])
+        sim = TASimulator(
+            mechanism="gri30.yaml",
+            sample_composition="AR:1",
+            bath_gas="AR",
+            dt=2.0,
+            temperature_program=prog,
+        )
+        result = sim.run()
+
+        # Furnace should reach 200 then decrease
+        peak_idx = np.argmax(result.furnace_temperature_C)
+        assert result.furnace_temperature_C[peak_idx] == pytest.approx(200.0, abs=1.0)
+        assert result.furnace_temperature_C[-1] < 200.0
+
+    def test_program_stored_in_result(self):
+        """SimulationResult should carry the temperature program."""
+        prog = TemperatureProgram.single_ramp(50.0, 200.0, 10.0)
+        sim = TASimulator(
+            mechanism="gri30.yaml",
+            sample_composition="AR:1",
+            bath_gas="AR",
+            dt=5.0,
+            temperature_program=prog,
+        )
+        result = sim.run()
+
+        assert result.temperature_program is prog
+
+    def test_legacy_api_still_works(self):
+        """Using T_initial_C/T_final_C/heating_rate should still work."""
+        sim = TASimulator(
+            mechanism="gri30.yaml",
+            sample_composition="AR:1",
+            bath_gas="AR",
+            T_initial_C=50.0,
+            T_final_C=200.0,
+            heating_rate_C_per_min=10.0,
+            dt=5.0,
+        )
+        result = sim.run()
+
+        assert result.furnace_temperature_C[0] == pytest.approx(50.0)
+        assert result.temperature_program is not None
+        assert result.temperature_program.T_initial_C == pytest.approx(50.0)
+        assert result.temperature_program.T_final_C == pytest.approx(200.0)

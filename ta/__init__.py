@@ -1,11 +1,14 @@
 """TA: Thermal Analysis simulation package using Cantera."""
 
+from ta.temperature_program import TemperatureProgram, TemperatureSegment
 from ta.simulator import TASimulator, SimulationResult
 from ta.signals import compute_tga, compute_dtg, compute_dta, compute_ms
 from ta.plotter import plot_ta_figure
 
 __version__ = "0.1.0"
 __all__ = [
+    "TemperatureProgram",
+    "TemperatureSegment",
     "TASimulator",
     "SimulationResult",
     "compute_tga",
