@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Conda (micromamba)
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          micromamba-version: latest
+          environment-name: ta_env
+          create-args: >-
+            python=${{ matrix.python-version }}
+            cantera>=3.0
+            numpy
+            scipy
+            matplotlib
+            pytest
+            pytest-cov
+            pytest-xdist
+            -c conda-forge
+            -c cantera
+
+      - name: Install package
+        shell: micromamba-shell {0}
+        run: pip install -e .
+
+      - name: Run tests
+        shell: micromamba-shell {0}
+        run: pytest -v --tb=short --cov=ta --cov-report=term-missing
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: .coverage
