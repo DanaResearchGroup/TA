@@ -12,6 +12,7 @@ ct = pytest.importorskip("cantera")
 from ta.simulator import TASimulator
 from ta.signals import compute_tga, compute_dtg, compute_dta, compute_ms
 from ta.plotter import plot_ta_figure
+from ta.temperature_program import TemperatureProgram, TemperatureSegment
 
 
 class TestFullPipeline:
@@ -116,3 +117,35 @@ class TestFullPipeline:
         for sp, arr in ms.items():
             assert sp in result.species_names
             np.testing.assert_array_equal(arr, result.mole_fractions[sp])
+
+    def test_multistage_pipeline(self):
+        """Ramp-hold-ramp program with reactive mixture produces valid signals."""
+        prog = TemperatureProgram(50.0, [
+            TemperatureSegment(20.0, 200.0),
+            TemperatureSegment(0.0, 200.0, hold_min=2.0),
+            TemperatureSegment(10.0, 400.0),
+        ])
+        result = TASimulator(
+            mechanism="gri30.yaml",
+            sample_composition="C2H6:0.7, CH4:0.3",
+            condensed_species=["C2H6", "CH4"],
+            dt=5.0,
+            temperature_program=prog,
+        ).run()
+
+        tga = compute_tga(result)
+        dtg = compute_dtg(tga, result.time_s)
+        dta = compute_dta(result)
+        ms = compute_ms(result, top_n=5)
+
+        assert len(tga) == len(result.time_s)
+        assert tga[0] == pytest.approx(100.0, abs=0.1)
+        assert np.all(np.isfinite(tga))
+        assert np.all(np.isfinite(dtg))
+        assert np.all(np.isfinite(dta))
+
+        fig, axes = plot_ta_figure(
+            result.furnace_temperature_C, tga, dtg, dta, ms,
+        )
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)

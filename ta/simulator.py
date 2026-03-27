@@ -2,15 +2,17 @@
 
 Uses a :class:`~cantera.ConstPressureReactor` (sample pan) connected to a
 :class:`~cantera.Reservoir` (furnace) via a :class:`~cantera.Wall` with a
-finite heat-transfer coefficient.  The furnace follows a prescribed linear
-temperature ramp; the sample heats through the wall, producing realistic
-thermal lag and enabling proper DTA measurement.
+finite heat-transfer coefficient.  The furnace follows a prescribed
+temperature program (one or more ramp / hold / cooling segments); the
+sample heats through the wall, producing realistic thermal lag and
+enabling proper DTA measurement.
 
-The furnace ramp is implemented via a time-dependent heat-flux function
-(:class:`~cantera.Func1`) on the wall, so that the reservoir temperature
-stays fixed at the initial value while the *effective* furnace temperature
-increases linearly.  This avoids the Cantera limitation that a
-:class:`~cantera.Reservoir` state cannot be updated mid-integration.
+The furnace profile is implemented via a time-dependent heat-flux
+function (:class:`~cantera.Func1`) on the wall, so that the reservoir
+temperature stays fixed at the initial value while the *effective*
+furnace temperature follows the program.  This avoids the Cantera
+limitation that a :class:`~cantera.Reservoir` state cannot be updated
+mid-integration.
 
 This is a gas-phase approximation using **phase filtering**: species are
 partitioned into *condensed* (tracked for TGA) and *volatile* (tracked for
@@ -20,10 +22,12 @@ polymer modelling a Cantera ``Interface`` / bulk-phase mechanism is required.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cantera as ct
 import numpy as np
+
+from ta.temperature_program import TemperatureProgram, TemperatureSegment
 
 
 @dataclass
@@ -62,6 +66,8 @@ class SimulationResult:
         Bath gas volumetric flow rate [standard cm^3/min].
     pressure_Pa : float
         System pressure [Pa].
+    temperature_program : TemperatureProgram or None
+        The temperature program used for this simulation, if available.
     """
 
     time_s: np.ndarray
@@ -78,6 +84,7 @@ class SimulationResult:
     bath_gas: str
     bath_gas_flow_sccm: float
     pressure_Pa: float
+    temperature_program: TemperatureProgram | None = None
 
 
 class TASimulator:
@@ -85,12 +92,13 @@ class TASimulator:
 
     The experiment consists of a sample crucible (``ConstPressureReactor``)
     inside a furnace (``Reservoir``) connected by a ``Wall`` with heat-transfer
-    coefficient *U* and area *A*.  The furnace follows a linear temperature
-    ramp while the sample heats through the wall, producing thermal lag.
+    coefficient *U* and area *A*.  The furnace follows a temperature program
+    (one or more ramp / hold / cooling segments) while the sample heats
+    through the wall, producing thermal lag.
 
     Implementation
     --------------
-    The furnace ramp is realised as a time-dependent wall heat-flux
+    The furnace profile is realised as a time-dependent wall heat-flux
     ``Func1`` so that the single ``ReactorNet.advance()`` loop handles
     both chemistry and heat transfer without re-creating the network.
 
@@ -119,11 +127,14 @@ class TASimulator:
     bath_gas_flow_sccm : float
         Bath-gas volumetric flow rate at STP [cm^3/min].
     T_initial_C : float
-        Starting temperature [deg C] (default 50).
+        Starting temperature [deg C] (default 50).  Ignored when
+        *temperature_program* is provided.
     T_final_C : float
-        Target temperature [deg C] (default 600).
+        Target temperature [deg C] (default 600).  Ignored when
+        *temperature_program* is provided.
     heating_rate_C_per_min : float
-        Linear heating rate [deg C / min] (default 5).
+        Linear heating rate [deg C / min] (default 5).  Ignored when
+        *temperature_program* is provided.
     pressure_atm : float
         System pressure [atm] (default 1).
     condensed_species : list[str] or None
@@ -136,6 +147,9 @@ class TASimulator:
         Wall area between furnace and sample [m^2] (default 1e-4).
     htc : float
         Wall heat-transfer coefficient [W/m^2/K] (default 100).
+    temperature_program : TemperatureProgram or None
+        Multi-segment temperature program.  When provided, overrides
+        *T_initial_C*, *T_final_C*, and *heating_rate_C_per_min*.
     """
 
     def __init__(
@@ -153,6 +167,7 @@ class TASimulator:
         dt: float = 1.0,
         wall_area: float = 1e-4,
         htc: float = 100.0,
+        temperature_program: TemperatureProgram | None = None,
     ) -> None:
         self.mechanism = mechanism
         self.sample_composition = sample_composition
@@ -163,16 +178,18 @@ class TASimulator:
         self.wall_area = wall_area
         self.htc = htc
 
-        # --- unit conversions ---
-        self.T_initial_K = T_initial_C + 273.15
-        self.T_final_K = T_final_C + 273.15
-        self.heating_rate_K_per_s = heating_rate_C_per_min / 60.0
-        self.pressure_Pa = pressure_atm * ct.one_atm
+        # --- temperature program ---
+        if temperature_program is not None:
+            self.program = temperature_program
+        else:
+            self.program = TemperatureProgram.single_ramp(
+                T_initial_C, T_final_C, heating_rate_C_per_min,
+            )
 
-        # --- simulation length ---
-        self.t_final_s = (
-            (self.T_final_K - self.T_initial_K) / self.heating_rate_K_per_s
-        )
+        # --- derived quantities ---
+        self.T_initial_K = self.program.T_initial_C + 273.15
+        self.pressure_Pa = pressure_atm * ct.one_atm
+        self.t_final_s = self.program.total_time_s
         self.n_steps = int(np.ceil(self.t_final_s / self.dt))
 
         # --- probe mechanism for species list ---
@@ -233,15 +250,16 @@ class TASimulator:
 
         furnace = ct.Reservoir(furnace_gas)
 
-        # The furnace ramp is realised as a time-dependent wall heat flux.
-        # Total wall heat rate [W]:
+        # The furnace profile is realised as a time-dependent wall heat
+        # flux.  Total wall heat rate [W]:
         #   Q_wall = U·A·(T_reservoir − T_reactor) + A·Q(t)
-        # With T_reservoir = T_initial and Q(t) = U·rate·t :
-        #   Q_wall = U·A·(T_initial + rate·t − T_reactor)
-        #          = U·A·(T_furnace(t) − T_reactor)
+        # With T_reservoir fixed at T_initial and
+        #   Q(t) = U·(T_program(t) − T_initial)  [W/m²]:
+        #   Q_wall = U·A·(T_program(t) − T_reactor)
+        program = self.program
         htc = self.htc
-        rate = self.heating_rate_K_per_s
-        Q_ramp = ct.Func1(lambda t: htc * rate * t)
+        T_init_K = self.T_initial_K
+        Q_ramp = ct.Func1(lambda t: htc * (program.T_furnace_K(t) - T_init_K))
 
         wall = ct.Wall(
             furnace, reactor,
@@ -274,19 +292,17 @@ class TASimulator:
         n_recorded = 1
         for step in range(1, self.n_steps + 1):
             t = step * self.dt
-            T_furn_K = self.T_initial_K + self.heating_rate_K_per_s * t
-
-            if T_furn_K > self.T_final_K:
+            if t > self.t_final_s + 1e-10:
                 break
 
             # Advance the reactor network (Cantera handles energy +
             # chemistry via the coupled ODE system; the wall Func1
-            # provides the furnace ramp continuously).
+            # provides the furnace profile continuously).
             net.advance(t)
 
             # Record state
             times[n_recorded] = t
-            T_furnace[n_recorded] = T_furn_K - 273.15
+            T_furnace[n_recorded] = program.T_furnace_C(t)
             T_reactor[n_recorded] = reactor.thermo.T - 273.15
             mass_reactor[n_recorded] = reactor.mass
             Y_hist[n_recorded] = reactor.thermo.Y
@@ -328,4 +344,5 @@ class TASimulator:
             bath_gas=self.bath_gas,
             bath_gas_flow_sccm=self.bath_gas_flow_sccm,
             pressure_Pa=self.pressure_Pa,
+            temperature_program=self.program,
         )

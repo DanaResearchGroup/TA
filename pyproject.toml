@@ -20,6 +20,11 @@ dev = [
     "pytest-cov",
     "pytest-xdist",
 ]
+docs = [
+    "sphinx>=7.0",
+    "furo",
+    "myst-parser",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

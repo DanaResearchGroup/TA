@@ -1,0 +1,62 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+
+# Allow only one concurrent deployment
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Conda (micromamba)
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          micromamba-version: latest
+          environment-name: docs
+          create-args: >-
+            python=3.12
+            cantera>=3.0
+            numpy
+            scipy
+            matplotlib
+            sphinx>=7.0
+            furo
+            myst-parser
+            -c conda-forge
+            -c cantera
+
+      - name: Install package
+        shell: micromamba-shell {0}
+        run: pip install -e .
+
+      - name: Build docs
+        shell: micromamba-shell {0}
+        run: sphinx-build docs docs/_build/html -b html -W
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
