@@ -35,7 +35,9 @@ python examples/run_benchmark.py
 
 The package has three modules forming a pipeline: **simulate -> compute signals -> plot**.
 
-- **`ta/simulator.py`** — `TASimulator` sets up a Cantera `ConstPressureReactor` (sample pan) connected to a `Reservoir` (furnace) via a `Wall` with heat-transfer coefficient and area. The furnace temperature ramp is implemented as a `Func1` on the wall, so the energy equation is fully coupled (no operator splitting). Returns a `SimulationResult` dataclass with furnace/reactor temperature, mass fractions, mole fractions, wall heat flux, and density.
+- **`ta/temperature_program.py`** — `TemperatureProgram` and `TemperatureSegment` define multi-segment furnace profiles (ramps, isothermal holds, cooling). The program precomputes segment boundaries and provides fast `T_furnace_K(t)` / `T_furnace_C(t)` lookup via `bisect`.
+
+- **`ta/simulator.py`** — `TASimulator` sets up a Cantera `ConstPressureReactor` (sample pan) connected to a `Reservoir` (furnace) via a `Wall` with heat-transfer coefficient and area. The furnace temperature profile (single ramp or multi-segment `TemperatureProgram`) is implemented as a `Func1` on the wall, so the energy equation is fully coupled (no operator splitting). Returns a `SimulationResult` dataclass with furnace/reactor temperature, mass fractions, mole fractions, wall heat flux, and density.
 
 - **`ta/signals.py`** — Pure NumPy post-processing functions that derive instrument signals from `SimulationResult`:
   - `compute_tga` — sum of condensed-species mass fractions × 100
@@ -48,5 +50,5 @@ The package has three modules forming a pipeline: **simulate -> compute signals 
 ## Key Concepts
 
 - **Condensed vs. volatile species**: Species in `condensed_species` stay in the crucible (tracked for TGA mass loss); all others are volatile (tracked for MS).
-- **Wall-based heat transfer**: The furnace `Reservoir` stays at the initial temperature; a `Func1` heat-flux term on the `Wall` adds `U·rate·t` so the effective furnace temperature ramps linearly. This avoids the Cantera limitation that `Reservoir` state cannot be updated mid-integration.
+- **Wall-based heat transfer**: The furnace `Reservoir` stays at the initial temperature; a `Func1` heat-flux term on the `Wall` adds `U·(T_program(t) - T_initial)` so the effective furnace temperature follows the program. This avoids the Cantera limitation that `Reservoir` state cannot be updated mid-integration. Works for ramps, holds, and cooling segments alike.
 - **Thermal lag**: The reactor temperature lags behind the furnace due to the finite wall `U·A`. Steady-state lag = `m·cp·rate / (U·A)`. Exo/endothermic reactions modulate this lag, producing the DTA signal.

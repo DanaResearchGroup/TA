@@ -4,7 +4,7 @@ Development roadmap for the TA (Thermal Analysis) simulator, organized into phas
 
 ---
 
-## Phase 1: Multi-Stage Temperature Programs
+## Phase 1: Multi-Stage Temperature Programs -- COMPLETED
 
 **Goal**: Support arbitrary temperature profiles (ramp-hold-ramp, cooling segments, isothermal holds).
 
@@ -12,12 +12,14 @@ Development roadmap for the TA (Thermal Analysis) simulator, organized into phas
 
 **Work items**:
 
-- Generalize the `Func1` wall heat-flux to accept a list of `(rate_C_per_min, T_target_C)` segments, where `rate=0` means isothermal hold.
-- Build a `TemperatureProgram` helper class that computes `T_furnace(t)` and the corresponding `Q(t)` for the wall, handling segment boundaries and sign changes (cooling).
-- Add a `cooling_rate` path: when `rate < 0`, the furnace cools and the reactor follows with inverted thermal lag.
-- Update `SimulationResult` to store the program metadata so signals and plots can annotate segment boundaries.
+- [x] Generalize the `Func1` wall heat-flux to accept a list of `(rate_C_per_min, T_target_C)` segments, where `rate=0` means isothermal hold.
+- [x] Build a `TemperatureProgram` helper class that computes `T_furnace(t)` and the corresponding `Q(t)` for the wall, handling segment boundaries and sign changes (cooling).
+- [x] Add a `cooling_rate` path: when `rate < 0`, the furnace cools and the reactor follows with inverted thermal lag.
+- [x] Update `SimulationResult` to store the program metadata so signals and plots can annotate segment boundaries.
 
 **Validation**: Test that a ramp-hold-ramp program produces a flat reactor temperature during the hold (within thermal-lag tolerance), and that cooling segments invert the DTA sign.
+
+**Implemented in**: `ta/temperature_program.py` (`TemperatureSegment`, `TemperatureProgram`), updated `ta/simulator.py` (new `temperature_program` parameter, backward-compatible), `examples/run_multistage.py`. 16 new tests (74 total, 99% coverage).
 
 ---
 
@@ -130,18 +132,14 @@ Development roadmap for the TA (Thermal Analysis) simulator, organized into phas
 These items support all phases and should be addressed incrementally.
 
 ### CI/CD
-- Add GitHub Actions workflow: run `pytest` on push/PR against Python 3.12+ with Cantera from conda-forge.
+- [x] Add GitHub Actions workflow: run `pytest` on push/PR against Python 3.12+ with Cantera from conda-forge.
 - Add a slow-test marker (`@pytest.mark.slow`) for full-mechanism runs; run only on `main` merges.
 
 ### Documentation
 - Set up Sphinx with autodoc to generate API reference from the existing docstrings.
 - Add a tutorial notebook (`examples/tutorial.ipynb`) walking through simulation, signal computation, and plotting.
 
-### Packaging
-- Publish to PyPI (pure-Python portion) with Cantera as an optional dependency documented in install instructions.
-- Add `py.typed` marker and verify `mypy --strict` passes for the `ta` package.
-
 ### Testing
-- Add integration tests that run a full simulate-signal-plot pipeline and assert output shapes and value ranges.
+- [x] Add integration tests that run a full simulate-signal-plot pipeline and assert output shapes and value ranges.
 - Add property-based tests (Hypothesis) for signal functions: e.g., TGA is always in [0, 100], DTG of monotonic TGA is always non-positive.
-- Add a `conftest.py` with shared fixtures for common simulator configurations.
+- [x] Add a `conftest.py` with shared fixtures for common simulator configurations.
